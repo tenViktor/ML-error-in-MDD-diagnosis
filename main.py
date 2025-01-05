@@ -5,6 +5,10 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
+from sklearn.linear_model import SGDClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 """
@@ -30,6 +34,38 @@ Original dataset: https://figshare.com/articles/dataset/EEG_Data_New/4244171/2
 
 # Enabling interactive mode to display shap results correctly
 plt.ion
+
+def _find_best_leaf(max_leaf_nodes: list, train_X:list, val_X:list, train_y:list, val_y:list):
+    """
+    Finds the best number of leaf nodes for Decision Trees
+    
+    :param list max_leaf_nodes: list of different numbers of leaves
+    :param list train_X...val_y: split data
+    :return int best_leaf: optimal number of leaf nodes 
+    """
+    
+    best_acs = 0
+    best_leaf = 0
+    
+    for leaf_size in max_leaf_nodes:
+        model = DecisionTreeClassifier(max_leaf_nodes=leaf_size, random_state=0)
+        model.fit(train_X, train_y)
+        pred_y = model.predict(val_X)
+        acs = accuracy_score(val_y, pred_y)
+        if best_acs != None:
+            if acs > best_acs:
+                best_acs = acs
+                best_leaf = leaf_size
+            else:
+                continue
+        else:
+            best_acs = acs
+            best_leaf = leaf_size
+    
+    return best_leaf
+    
+    # getting accuracy score
+    acs = accuracy_score(val_y, pred_y)
 
 def load_data(filename: str) -> pd.DataFrame:
     """
@@ -113,7 +149,27 @@ def load_data(filename: str) -> pd.DataFrame:
     
     return pd.DataFrame(df_list)
 
+def split_data(data: pd.DataFrame) -> tuple:
+    """
+    Spits loaded data into training and validating data
+    
+    :param pd.DataFrame data: original DataFrame containing the data
+    :return tuple: return training and validation data
+    """
+    
+    # separatin our features and function
+    eeg_data = data.dropna(axis=0)
+    eeg_features = ['type', 'channel', 'data']
+    X = eeg_features[eeg_features]
+    y = eeg_data.state
+
+    # splitting data and ensuring consistend split
+    train_X, val_X, train_y, val_y = train_test_split(X,y, random_state=1)
+    
+    return train_X, val_X, train_y, val_y
+
 if __name__ == '__main__':
     df = load_data('.training_data')
     df.style
     print('success')
+    train_X, val_X, train_y, val_y = split_data(df)
