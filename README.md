@@ -15,3 +15,7 @@ Anotation of data:
 'EC' stands for eyes closed
 'EO' stands for eyes open
 'TASK' stands for P300 data
+
+
+The best performance as of right now
+![comparison_01](https://github.com/user-attachments/assets/4a86c574-4350-472a-a008-49e62e47cb3a)
