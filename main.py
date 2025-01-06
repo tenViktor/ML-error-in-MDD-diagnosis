@@ -1,3 +1,4 @@
+#%%%
 import os
 import mne
 import shap
@@ -31,27 +32,30 @@ Github repo: https://github.com/tenViktor/ML-error-in-MDD-diagnosis
 Original dataset: https://figshare.com/articles/dataset/EEG_Data_New/4244171/2
 
 """
-
+#%%%
 # Enabling interactive mode to display shap results correctly
 plt.ion
 
-def _find_best_leaf(max_leaf_nodes: list, train_X:list, val_X:list, train_y:list, val_y:list):
+def _find_best_leaf(max_leaf_nodes: list, train_X:np.ndarray, val_X:np.ndarray, train_y:np.ndarray, val_y:np.ndarray, show_figure:bool=False):
     """
     Finds the best number of leaf nodes for Decision Trees
     
     :param list max_leaf_nodes: list of different numbers of leaves
     :param list train_X...val_y: split data
+    :param bool show_figure: graph of leaf nodes and their accuracy scores
     :return int best_leaf: optimal number of leaf nodes 
     """
     
     best_acs = 0
     best_leaf = 0
+    leaf_acs_list = list()
     
     for leaf_size in max_leaf_nodes:
         model = DecisionTreeClassifier(max_leaf_nodes=leaf_size, random_state=0)
         model.fit(train_X, train_y)
         pred_y = model.predict(val_X)
         acs = accuracy_score(val_y, pred_y)
+        leaf_acs_list.append(acs)
         if best_acs != None:
             if acs > best_acs:
                 best_acs = acs
@@ -62,12 +66,23 @@ def _find_best_leaf(max_leaf_nodes: list, train_X:list, val_X:list, train_y:list
             best_acs = acs
             best_leaf = leaf_size
     
+    
+    if show_figure:
+        graph = pd.DataFrame({'x': max_leaf_nodes, 'y': leaf_acs_list})
+        graph['optimal'] = graph['x'] == best_leaf
+        
+        plt.figure(figsize=(12,8))
+        sns.histplot(data=graph, hue='optimal', palette={True: 'red', False:'blue'})
+        
+        plt.title('Comparison of leaf nodes and their accuracy score')
+        plt.xlabel('Number of leaf nodes')
+        plt.ylabel('Accuracy score')
+        plt.legend(labels=['non-optimal','optimal'])
+    
     return best_leaf
     
-    # getting accuracy score
-    acs = accuracy_score(val_y, pred_y)
 
-def load_data(filename: str) -> pd.DataFrame:
+def load_data(filename: str, epoch_length: float) -> pd.DataFrame:
     """
     Loads data from a directory and preprocesses it.
     
@@ -75,6 +90,9 @@ def load_data(filename: str) -> pd.DataFrame:
     
     
     :param str filename: name of the directory containing data
+    :param float epoch_duration: duration of a single epoch 
+    - used for signal splicing and calculations
+    - smaller epoch_duration requires larger datasets in order to prevent overfitting
     :return pd.Dataframe: dataframe containing clean data
     """
     
@@ -82,7 +100,6 @@ def load_data(filename: str) -> pd.DataFrame:
     # Change path in case of different directory placement
     path = os.path.join(
         os.getcwd(),
-        'ML-error-in-MDD-diagnosis',
         filename
         )
 
@@ -99,6 +116,9 @@ def load_data(filename: str) -> pd.DataFrame:
         'EEG T3-LE', 'EEG T4-LE'         
     ]  
 
+    channel_dict = {channel: idx for idx, channel in enumerate(good_channels)}  
+    print(channel_dict)
+    
     for file in os.listdir(path):
         # Labeling Healthy and MDD samples
         if ('H S' in file):
@@ -110,13 +130,13 @@ def load_data(filename: str) -> pd.DataFrame:
             
         if ('EO' in file):
             # epoch = 0 -> eyes open during data aquisition
-            epoch = 0
+            epoch_type = 0
         elif ('EC' in file):
             # epoch = 1 -> eyes closed during data aquisition
-            epoch = 1
+            epoch_type = 1
         else:
             # epoch = 2 -> P300 data
-            epoch = 2
+            epoch_type = 2
             
         full_path = os.path.join(
             path, file
@@ -131,21 +151,49 @@ def load_data(filename: str) -> pd.DataFrame:
         raw.pick(
             good_channels
             )
+        
+        #cropping out the beginning in case artifacts and/or filter initialization
         raw.crop(tmin=1,tmax=4).load_data()
         # low-pass filter for removing noise
-        filtered_sig = raw.filter(
-            l_freq=None, h_freq=40, fir_design='firwin'
+        raw.filter(
+            l_freq=None, h_freq=40, 
+            fir_design='firwin', verbose= None
             )
         
+        sfreq = raw.info['sfreq']
+        samples_per_epoch = int(sfreq*epoch_length)
+        print(samples_per_epoch)
         
+        # for each EEG channel
         for channel_name in raw.info['ch_names']:
             channel_data = raw.get_data(
                 picks=channel_name
                 )
-            df_list.append({
-                'state': state, 'type': epoch, 
-                'channel': channel_data,'data': filtered_sig}
-                           )
+            
+            # calculating number of epochs based on individual epoch length
+            epoch_num = len(channel_data) // samples_per_epoch
+            epochs = np.array_split(
+                channel_data[:epoch_num * samples_per_epoch],
+                epoch_num
+                )
+            print(epoch_num)
+            print(epochs)
+            
+            # defining each row in a DataFrame
+            # feature definition
+            for epoch in epochs:
+                df_list.append({
+                    'state': state, 
+                    'type': epoch_type, 
+                    'channel': channel_dict[channel_name],
+                    'mean': np.mean(epoch),
+                    'std': np.std(epoch),
+                    'min': np.min(epoch),
+                    'max': np.max(epoch),
+                    'ptp': np.ptp(epoch),
+                    'kurtosis': float(pd.Series(epoch).kurtosis())
+                    }
+                )
     
     return pd.DataFrame(df_list)
 
@@ -157,19 +205,29 @@ def split_data(data: pd.DataFrame) -> tuple:
     :return tuple: return training and validation data
     """
     
-    # separatin our features and function
+    # separating our features and function
     eeg_data = data.dropna(axis=0)
     eeg_features = ['type', 'channel', 'data']
-    X = eeg_features[eeg_features]
+    X = eeg_data[eeg_features]
     y = eeg_data.state
 
     # splitting data and ensuring consistend split
-    train_X, val_X, train_y, val_y = train_test_split(X,y, random_state=1)
+    return train_test_split(X,y, random_state=1)
     
-    return train_X, val_X, train_y, val_y
-
+    
+#%%%
 if __name__ == '__main__':
-    df = load_data('.training_data')
+    #%%%
+    df = load_data(filename='.training_data', epoch_length=0.5)
+    #%%%
     df.style
     print('success')
+    df.shape
+    df
+    
+    #%%%
     train_X, val_X, train_y, val_y = split_data(df)
+    display(train_X, val_X, train_y, val_y)
+    #%%%
+    _find_best_leaf([5,50,500,5000], train_X=train_X, val_X=val_X,train_y=train_y,val_y=val_y, show_figure=True)
+# %%
